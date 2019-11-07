@@ -50,7 +50,7 @@ static int closed = 0;
 char *buffer;
 pthread_t thread;
 unsigned int card = 0;
-unsigned int device = 1;
+unsigned int device = 0;
 unsigned int channels = 2;
 unsigned int rate = 44100;
 unsigned int bits = 16;
