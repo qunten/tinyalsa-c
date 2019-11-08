@@ -32,116 +32,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <signal.h>
-
-struct cmd {
-    const char *filename;
-    const char *filetype;
-    unsigned int card;
-    unsigned int device;
-    int flags;
-    struct pcm_config config;
-    unsigned int bits;
-};
-
-void cmd_init(struct cmd *cmd)
-{
-    cmd->filename = NULL;
-    cmd->filetype = NULL;
-    cmd->card = 0;
-    cmd->device = 0;
-    cmd->flags = PCM_OUT;
-    cmd->config.period_size = 1024;
-    cmd->config.period_count = 2;
-    cmd->config.channels = 2;
-    cmd->config.rate = 48000;
-    cmd->config.format = PCM_FORMAT_S16_LE;
-    cmd->config.silence_threshold = 1024 * 2;
-    cmd->config.stop_threshold = 1024 * 2;
-    cmd->config.start_threshold = 1024;
-    cmd->bits = 16;
-}
-
-int cmd_parse_arg(struct cmd *cmd, int argc, const char **argv)
-{
-    if (argc < 1) {
-        return 0;
-    }
-
-    if ((strcmp(argv[0], "-M") == 0) || (strcmp(argv[0], "--mmap") == 0)) {
-        cmd->flags |= PCM_MMAP;
-        return 1;
-    }
-
-    if (argv[0][0] != '-' || (strcmp(argv[0],"-") == 0)) {
-        cmd->filename = argv[0];
-        return 1;
-    }
-
-    if (argc < 2) {
-        fprintf(stderr, "option '%s' is missing argument\n", argv[0]);
-        return -1;
-    }
-
-    if ((strcmp(argv[0], "-D") == 0) || (strcmp(argv[0], "--card") == 0)) {
-        if (sscanf(argv[1], "%u", &cmd->card) != 1) {
-            fprintf(stderr, "failed parsing card number '%s'\n", argv[1]);
-            return -1;
-        }
-    } else if ((strcmp(argv[0], "-d") == 0) || (strcmp(argv[0], "--device") == 0)) {
-        if (sscanf(argv[1], "%u", &cmd->device) != 1) {
-            fprintf(stderr, "failed parsing device number '%s'\n", argv[1]);
-            return -1;
-        }
-    } else if ((strcmp(argv[0], "-p") == 0) || (strcmp(argv[0], "--period-size") == 0)) {
-        if (sscanf(argv[1], "%u", &cmd->config.period_size) != 1) {
-            fprintf(stderr, "failed parsing period size '%s'\n", argv[1]);
-            return -1;
-        }
-    } else if ((strcmp(argv[0], "-n") == 0) || (strcmp(argv[0], "--period-count") == 0)) {
-        if (sscanf(argv[1], "%u", &cmd->config.period_count) != 1) {
-            fprintf(stderr, "failed parsing period count '%s'\n", argv[1]);
-            return -1;
-        }
-    } else if ((strcmp(argv[0], "-c") == 0) || (strcmp(argv[0], "--channels") == 0)) {
-        if (sscanf(argv[1], "%u", &cmd->config.channels) != 1) {
-            fprintf(stderr, "failed parsing channel count '%s'\n", argv[1]);
-            return -1;
-        }
-    } else if ((strcmp(argv[0], "-r") == 0) || (strcmp(argv[0], "--rate") == 0)) {
-        if (sscanf(argv[1], "%u", &cmd->config.rate) != 1) {
-            fprintf(stderr, "failed parsing rate '%s'\n", argv[1]);
-            return -1;
-        }
-    } else if ((strcmp(argv[0], "-i") == 0) || (strcmp(argv[0], "--file-type") == 0)) {
-        cmd->filetype = argv[1];
-    } else {
-        fprintf(stderr, "unknown option '%s'\n", argv[0]);
-        return -1;
-    }
-    return 2;
-}
-
-int cmd_parse_args(struct cmd *cmd, int argc, const char **argv)
-{
-    int i = 0;
-    while (i < argc) {
-        int j = cmd_parse_arg(cmd, argc - i, &argv[i]);
-        if (j < 0){
-            break;
-        }
-        i += j;
-    }
-
-    if ((cmd->filename != NULL)
-     && (cmd->filetype == NULL)) {
-        cmd->filetype = strrchr(cmd->filename, '.');
-        if (cmd->filetype != NULL) {
-            cmd->filetype++;
-        }
-    }
-
-    return i;
-}
+#include <endian.h>
 
 #define ID_RIFF 0x46464952
 #define ID_WAVE 0x45564157
@@ -168,127 +59,11 @@ struct chunk_fmt {
     uint16_t bits_per_sample;
 };
 
-struct ctx {
-    struct pcm *pcm;
-
-    struct riff_wave_header wave_header;
-    struct chunk_header chunk_header;
-    struct chunk_fmt chunk_fmt;
-
-    FILE *file;
-};
-
-int ctx_init(struct ctx* ctx, const struct cmd *cmd)
-{
-    unsigned int bits = cmd->bits;
-    struct pcm_config config = cmd->config;
-
-    if (cmd->filename == NULL) {
-        fprintf(stderr, "filename not specified\n");
-        return -1;
-    }
-    if (strcmp(cmd->filename, "-") == 0) {
-	    ctx->file = stdin;
-    } else {
-	    ctx->file = fopen(cmd->filename, "rb");
-	}
-    if (ctx->file == NULL) {
-        fprintf(stderr, "failed to open '%s'\n", cmd->filename);
-        return -1;
-    }
-
-    if ((cmd->filetype != NULL) && (strcmp(cmd->filetype, "wav") == 0)) {
-        if (fread(&ctx->wave_header, sizeof(ctx->wave_header), 1, ctx->file) != 1){
-            fprintf(stderr, "error: '%s' does not contain a riff/wave header\n", cmd->filename);
-            fclose(ctx->file);
-            return -1;
-        }
-        if ((ctx->wave_header.riff_id != ID_RIFF) ||
-            (ctx->wave_header.wave_id != ID_WAVE)) {
-            fprintf(stderr, "error: '%s' is not a riff/wave file\n", cmd->filename);
-            fclose(ctx->file);
-            return -1;
-        }
-	unsigned int more_chunks = 1;
-        do {
-            if (fread(&ctx->chunk_header, sizeof(ctx->chunk_header), 1, ctx->file) != 1){
-                fprintf(stderr, "error: '%s' does not contain a data chunk\n", cmd->filename);
-                fclose(ctx->file);
-                return -1;
-            }
-            switch (ctx->chunk_header.id) {
-            case ID_FMT:
-                if (fread(&ctx->chunk_fmt, sizeof(ctx->chunk_fmt), 1, ctx->file) != 1){
-                    fprintf(stderr, "error: '%s' has incomplete format chunk\n", cmd->filename);
-                    fclose(ctx->file);
-                    return -1;
-                }
-                /* If the format header is larger, skip the rest */
-                if (ctx->chunk_header.sz > sizeof(ctx->chunk_fmt))
-                    fseek(ctx->file, ctx->chunk_header.sz - sizeof(ctx->chunk_fmt), SEEK_CUR);
-                break;
-            case ID_DATA:
-                /* Stop looking for chunks */
-                more_chunks = 0;
-                break;
-            default:
-                /* Unknown chunk, skip bytes */
-                fseek(ctx->file, ctx->chunk_header.sz, SEEK_CUR);
-            }
-        } while (more_chunks);
-        config.channels = ctx->chunk_fmt.num_channels;
-        config.rate = ctx->chunk_fmt.sample_rate;
-        bits = ctx->chunk_fmt.bits_per_sample;
-    }
-
-    if (bits == 8) {
-        config.format = PCM_FORMAT_S8;
-    } else if (bits == 16) {
-        config.format = PCM_FORMAT_S16_LE;
-    } else if (bits == 24) {
-        config.format = PCM_FORMAT_S24_3LE;
-    } else if (bits == 32) {
-        config.format = PCM_FORMAT_S32_LE;
-    } else {
-        fprintf(stderr, "bit count '%u' not supported\n", bits);
-        fclose(ctx->file);
-        return -1;
-    }
-
-    ctx->pcm = pcm_open(cmd->card,
-                        cmd->device,
-                        cmd->flags,
-                        &config);
-    if (ctx->pcm == NULL) {
-        fprintf(stderr, "failed to allocate memory for pcm\n");
-        fclose(ctx->file);
-        return -1;
-    } else if (!pcm_is_ready(ctx->pcm)) {
-        fprintf(stderr, "failed to open for pcm %u,%u\n", cmd->card, cmd->device);
-        fclose(ctx->file);
-        pcm_close(ctx->pcm);
-        return -1;
-    }
-
-    return 0;
-}
-
-void ctx_free(struct ctx *ctx)
-{
-    if (ctx == NULL) {
-        return;
-    }
-    if (ctx->pcm != NULL) {
-        pcm_close(ctx->pcm);
-    }
-    if (ctx->file != NULL) {
-        fclose(ctx->file);
-    }
-}
-
 static int close = 0;
 
-int play_sample(struct ctx *ctx);
+void play_sample(FILE *file, unsigned int card, unsigned int device, unsigned int channels,
+                 unsigned int rate, unsigned int bits, unsigned int period_size,
+                 unsigned int period_count, uint32_t data_sz);
 
 void stream_close(int sig)
 {
@@ -297,54 +72,94 @@ void stream_close(int sig)
     close = 1;
 }
 
-void print_usage(const char *argv0)
+int main(int argc, char **argv)
 {
-    fprintf(stderr, "usage: %s file.wav [options]\n", argv0);
-    fprintf(stderr, "options:\n");
-    fprintf(stderr, "-D | --card   <card number>    The card to receive the audio\n");
-    fprintf(stderr, "-d | --device <device number>  The device to receive the audio\n");
-    fprintf(stderr, "-p | --period-size <size>      The size of the PCM's period\n");
-    fprintf(stderr, "-n | --period-count <count>    The number of PCM periods\n");
-    fprintf(stderr, "-i | --file-type <file-type >  The type of file to read (raw or wav)\n");
-    fprintf(stderr, "-c | --channels <count>        The amount of channels per frame\n");
-    fprintf(stderr, "-r | --rate <rate>             The amount of frames per second\n");
-    fprintf(stderr, "-b | --bits <bit-count>        The number of bits in one sample\n");
-    fprintf(stderr, "-M | --mmap                    Use memory mapped IO to play audio\n");
-}
-
-int main(int argc, const char **argv)
-{
-    struct cmd cmd;
-    struct ctx ctx;
+    FILE *file;
+    struct riff_wave_header riff_wave_header;
+    struct chunk_header chunk_header;
+    struct chunk_fmt chunk_fmt;
+    unsigned int device = 0;
+    unsigned int card = 0;
+    unsigned int period_size = 1024;
+    unsigned int period_count = 4;
+    char *filename;
+    int more_chunks = 1;
 
     if (argc < 2) {
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
+        fprintf(stderr, "Usage: %s file.wav [-D card] [-d device] [-p period_size]"
+                " [-n n_periods] \n", argv[0]);
+        return 1;
     }
 
-    cmd_init(&cmd);
-    if (cmd_parse_args(&cmd, argc - 1, &argv[1]) < 0) {
-        return EXIT_FAILURE;
+    filename = argv[1];
+    file = fopen(filename, "rb");
+    if (!file) {
+        fprintf(stderr, "Unable to open file '%s'\n", filename);
+        return 1;
     }
 
-    if (ctx_init(&ctx, &cmd) < 0) {
-        return EXIT_FAILURE;
+    fread(&riff_wave_header, sizeof(riff_wave_header), 1, file);
+    if ((riff_wave_header.riff_id != ID_RIFF) ||
+        (riff_wave_header.wave_id != ID_WAVE)) {
+        fprintf(stderr, "Error: '%s' is not a riff/wave file\n", filename);
+        fclose(file);
+        return 1;
     }
 
-    /* TODO get parameters from context */
-    printf("playing '%s': %u ch, %u hz, %u bit\n",
-           cmd.filename,
-           cmd.config.channels,
-           cmd.config.rate,
-           cmd.bits);
+    do {
+        fread(&chunk_header, sizeof(chunk_header), 1, file);
 
-    if (play_sample(&ctx) < 0) {
-        ctx_free(&ctx);
-        return EXIT_FAILURE;
+        switch (chunk_header.id) {
+        case ID_FMT:
+            fread(&chunk_fmt, sizeof(chunk_fmt), 1, file);
+            /* If the format header is larger, skip the rest */
+            if (chunk_header.sz > sizeof(chunk_fmt))
+                fseek(file, chunk_header.sz - sizeof(chunk_fmt), SEEK_CUR);
+            break;
+        case ID_DATA:
+            /* Stop looking for chunks */
+            more_chunks = 0;
+            chunk_header.sz = le32toh(chunk_header.sz);
+            break;
+        default:
+            /* Unknown chunk, skip bytes */
+            fseek(file, chunk_header.sz, SEEK_CUR);
+        }
+    } while (more_chunks);
+
+    /* parse command line arguments */
+    argv += 2;
+    while (*argv) {
+        if (strcmp(*argv, "-d") == 0) {
+            argv++;
+            if (*argv)
+                device = atoi(*argv);
+        }
+        if (strcmp(*argv, "-p") == 0) {
+            argv++;
+            if (*argv)
+                period_size = atoi(*argv);
+        }
+        if (strcmp(*argv, "-n") == 0) {
+            argv++;
+            if (*argv)
+                period_count = atoi(*argv);
+        }
+        if (strcmp(*argv, "-D") == 0) {
+            argv++;
+            if (*argv)
+                card = atoi(*argv);
+        }
+        if (*argv)
+            argv++;
     }
 
-    ctx_free(&ctx);
-    return EXIT_SUCCESS;
+    play_sample(file, card, device, chunk_fmt.num_channels, chunk_fmt.sample_rate,
+                chunk_fmt.bits_per_sample, period_size, period_count, chunk_header.sz);
+
+    fclose(file);
+
+    return 0;
 }
 
 int check_param(struct pcm_params *params, unsigned int param, unsigned int value,
@@ -371,56 +186,93 @@ int check_param(struct pcm_params *params, unsigned int param, unsigned int valu
     return is_within_bounds;
 }
 
-int sample_is_playable(const struct cmd *cmd)
+int sample_is_playable(unsigned int card, unsigned int device, unsigned int channels,
+                        unsigned int rate, unsigned int bits, unsigned int period_size,
+                        unsigned int period_count)
 {
     struct pcm_params *params;
     int can_play;
 
-    params = pcm_params_get(cmd->card, cmd->device, PCM_OUT);
+    params = pcm_params_get(card, device, PCM_OUT);
     if (params == NULL) {
-        fprintf(stderr, "unable to open PCM %u,%u\n", cmd->card, cmd->device);
+        fprintf(stderr, "Unable to open PCM device %u.\n", device);
         return 0;
     }
 
-    can_play = check_param(params, PCM_PARAM_RATE, cmd->config.rate, "sample rate", "hz");
-    can_play &= check_param(params, PCM_PARAM_CHANNELS, cmd->config.channels, "sample", " channels");
-    can_play &= check_param(params, PCM_PARAM_SAMPLE_BITS, cmd->bits, "bits", " bits");
-    can_play &= check_param(params, PCM_PARAM_PERIOD_SIZE, cmd->config.period_size, "period size", "");
-    can_play &= check_param(params, PCM_PARAM_PERIODS, cmd->config.period_count, "period count", "");
+    can_play = check_param(params, PCM_PARAM_RATE, rate, "Sample rate", "Hz");
+    can_play &= check_param(params, PCM_PARAM_CHANNELS, channels, "Sample", " channels");
+    can_play &= check_param(params, PCM_PARAM_SAMPLE_BITS, bits, "Bitrate", " bits");
+    can_play &= check_param(params, PCM_PARAM_PERIOD_SIZE, period_size, "Period size", " frames");
+    can_play &= check_param(params, PCM_PARAM_PERIODS, period_count, "Period count", " periods");
 
     pcm_params_free(params);
 
     return can_play;
 }
 
-int play_sample(struct ctx *ctx)
+void play_sample(FILE *file, unsigned int card, unsigned int device, unsigned int channels,
+                 unsigned int rate, unsigned int bits, unsigned int period_size,
+                 unsigned int period_count, uint32_t data_sz)
 {
+    struct pcm_config config;
+    struct pcm *pcm;
     char *buffer;
-    int size;
+    unsigned int size, read_sz;
     int num_read;
 
-    size = pcm_frames_to_bytes(ctx->pcm, pcm_get_buffer_size(ctx->pcm));
+    memset(&config, 0, sizeof(config));
+    config.channels = channels;
+    config.rate = rate;
+    config.period_size = period_size;
+    config.period_count = period_count;
+    if (bits == 32)
+        config.format = PCM_FORMAT_S32_LE;
+    else if (bits == 24)
+        config.format = PCM_FORMAT_S24_3LE;
+    else if (bits == 16)
+        config.format = PCM_FORMAT_S16_LE;
+    config.start_threshold = 0;
+    config.stop_threshold = 0;
+    config.silence_threshold = 0;
+
+    if (!sample_is_playable(card, device, channels, rate, bits, period_size, period_count)) {
+        return;
+    }
+
+    pcm = pcm_open(card, device, PCM_OUT, &config);
+    if (!pcm || !pcm_is_ready(pcm)) {
+        fprintf(stderr, "Unable to open PCM device %u (%s)\n",
+                device, pcm_get_error(pcm));
+        return;
+    }
+
+    size = pcm_frames_to_bytes(pcm, pcm_get_buffer_size(pcm));
     buffer = malloc(size);
     if (!buffer) {
-        fprintf(stderr, "unable to allocate %d bytes\n", size);
-        return -1;
+        fprintf(stderr, "Unable to allocate %d bytes\n", size);
+        free(buffer);
+        pcm_close(pcm);
+        return;
     }
+
+    printf("Playing sample: %u ch, %u hz, %u bit %u bytes\n", channels, rate, bits, data_sz);
 
     /* catch ctrl-c to shutdown cleanly */
     signal(SIGINT, stream_close);
 
     do {
-        num_read = fread(buffer, 1, size, ctx->file);
+        read_sz = size < data_sz ? size : data_sz;
+        num_read = fread(buffer, 1, read_sz, file);
         if (num_read > 0) {
-		if (pcm_writei(ctx->pcm, buffer,
-			pcm_bytes_to_frames(ctx->pcm, num_read)) < 0) {
-                fprintf(stderr, "error playing sample\n");
+            if (pcm_write(pcm, buffer, num_read)) {
+                fprintf(stderr, "Error playing sample\n");
                 break;
             }
+            data_sz -= num_read;
         }
-    } while (!close && num_read > 0);
+    } while (!close && num_read > 0 && data_sz > 0);
 
     free(buffer);
-    return 0;
+    pcm_close(pcm);
 }
 

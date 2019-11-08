@@ -25,70 +25,127 @@
 ** OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 ** DAMAGE.
 */
- 
+
 #include "asoundlib.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <signal.h>
 #include <string.h>
- 
-#include <pthread.h>
-#include <sys/time.h>
-#include <unistd.h>
- 
+#include <time.h>
+
 #define ID_RIFF 0x46464952
 #define ID_WAVE 0x45564157
 #define ID_FMT  0x20746d66
 #define ID_DATA 0x61746164
- 
+
 #define FORMAT_PCM 1
- 
- 
+
+struct wav_header {
+    uint32_t riff_id;
+    uint32_t riff_sz;
+    uint32_t riff_fmt;
+    uint32_t fmt_id;
+    uint32_t fmt_sz;
+    uint16_t audio_format;
+    uint16_t num_channels;
+    uint32_t sample_rate;
+    uint32_t byte_rate;
+    uint16_t block_align;
+    uint16_t bits_per_sample;
+    uint32_t data_id;
+    uint32_t data_sz;
+};
+
 int capturing = 1;
-static int closed = 0;
-char *buffer;
-pthread_t thread;
-unsigned int card = 0;
-unsigned int device = 0;
-unsigned int channels = 2;
-unsigned int rate = 44100;
-unsigned int bits = 16;
-unsigned int frames;
-unsigned int period_size = 1024;
-unsigned int period_count = 4;
- 
-unsigned int size;
- 
-unsigned int capture_sample(unsigned int card, unsigned int device,
+
+unsigned int capture_sample(FILE *file, unsigned int card, unsigned int device,
                             unsigned int channels, unsigned int rate,
                             enum pcm_format format, unsigned int period_size,
-                            unsigned int period_count);
- 
-void play_sample(unsigned int card, unsigned int device, unsigned int channels,
-                 unsigned int rate, unsigned int bits, unsigned int period_size,
-                 unsigned int period_count);                            
- 
-void sigint_handler(int sig)
+                            unsigned int period_count, unsigned int cap_time);
+
+void sigint_handler(int sig __unused)
 {
     capturing = 0;
-    closed = 1;
 }
- 
-void thread1(void)
-{
-    sleep(2);
-    printf("I am thread1\n");
- 
-    play_sample(card, device, channels, rate, bits, period_size, period_count);
-}
- 
+
 int main(int argc, char **argv)
 {
- 
+    FILE *file;
+    struct wav_header header;
+    unsigned int card = 0;
+    unsigned int device = 0;
+    unsigned int channels = 2;
+    unsigned int rate = 44100;
+    unsigned int bits = 16;
+    unsigned int frames;
+    unsigned int period_size = 1024;
+    unsigned int period_count = 4;
+    unsigned int cap_time = 0;
     enum pcm_format format;
-    signal(SIGINT, sigint_handler);
-    
+
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s file.wav [-D card] [-d device]"
+                " [-c channels] [-r rate] [-b bits] [-p period_size]"
+                " [-n n_periods] [-T capture time]\n", argv[0]);
+        return 1;
+    }
+
+    file = fopen(argv[1], "wb");
+    if (!file) {
+        fprintf(stderr, "Unable to create file '%s'\n", argv[1]);
+        return 1;
+    }
+
+    /* parse command line arguments */
+    argv += 2;
+    while (*argv) {
+        if (strcmp(*argv, "-d") == 0) {
+            argv++;
+            if (*argv)
+                device = atoi(*argv);
+        } else if (strcmp(*argv, "-c") == 0) {
+            argv++;
+            if (*argv)
+                channels = atoi(*argv);
+        } else if (strcmp(*argv, "-r") == 0) {
+            argv++;
+            if (*argv)
+                rate = atoi(*argv);
+        } else if (strcmp(*argv, "-b") == 0) {
+            argv++;
+            if (*argv)
+                bits = atoi(*argv);
+        } else if (strcmp(*argv, "-D") == 0) {
+            argv++;
+            if (*argv)
+                card = atoi(*argv);
+        } else if (strcmp(*argv, "-p") == 0) {
+            argv++;
+            if (*argv)
+                period_size = atoi(*argv);
+        } else if (strcmp(*argv, "-n") == 0) {
+            argv++;
+            if (*argv)
+                period_count = atoi(*argv);
+        } else if (strcmp(*argv, "-T") == 0) {
+            argv++;
+            if (*argv)
+                cap_time = atoi(*argv);
+        }
+        if (*argv)
+            argv++;
+    }
+
+    header.riff_id = ID_RIFF;
+    header.riff_sz = 0;
+    header.riff_fmt = ID_WAVE;
+    header.fmt_id = ID_FMT;
+    header.fmt_sz = 16;
+    header.audio_format = FORMAT_PCM;
+    header.num_channels = channels;
+    header.sample_rate = rate;
+
     switch (bits) {
     case 32:
         format = PCM_FORMAT_S32_LE;
@@ -100,37 +157,53 @@ int main(int argc, char **argv)
         format = PCM_FORMAT_S16_LE;
         break;
     default:
-        printf("%d bits is not supported.\n", bits);
+        fprintf(stderr, "%u bits is not supported.\n", bits);
+        fclose(file);
         return 1;
     }
- 
-     if((pthread_create(&thread, NULL, (void *)thread1, NULL)) == 0)  //comment2     
-    {
-        printf("Create pthread ok!\n");
-    }else{
-        printf("Create pthread failed!\n");
-    }
-        
+
+    header.bits_per_sample = pcm_format_to_bits(format);
+    header.byte_rate = (header.bits_per_sample / 8) * channels * rate;
+    header.block_align = channels * (header.bits_per_sample / 8);
+    header.data_id = ID_DATA;
+
+    /* leave enough room for header */
+    fseek(file, sizeof(struct wav_header), SEEK_SET);
+
     /* install signal handler and begin capturing */
-    
-    frames = capture_sample(card, device, channels,
-                            rate, format,
-                            period_size, period_count);
- 
-    
-    printf("Captured %d frames\n", frames);                            
- 
+    signal(SIGINT, sigint_handler);
+    signal(SIGHUP, sigint_handler);
+    signal(SIGTERM, sigint_handler);
+    frames = capture_sample(file, card, device, header.num_channels,
+                            header.sample_rate, format,
+                            period_size, period_count, cap_time);
+    printf("Captured %u frames\n", frames);
+
+    /* write header now all information is known */
+    header.data_sz = frames * header.block_align;
+    header.riff_sz = header.data_sz + sizeof(header) - 8;
+    fseek(file, 0, SEEK_SET);
+    fwrite(&header, sizeof(struct wav_header), 1, file);
+
+    fclose(file);
+
     return 0;
 }
- 
-unsigned int capture_sample(unsigned int card, unsigned int device,
+
+unsigned int capture_sample(FILE *file, unsigned int card, unsigned int device,
                             unsigned int channels, unsigned int rate,
                             enum pcm_format format, unsigned int period_size,
-                            unsigned int period_count)
+                            unsigned int period_count, unsigned int cap_time)
 {
     struct pcm_config config;
     struct pcm *pcm;
-    
+    char *buffer;
+    unsigned int size;
+    unsigned int bytes_read = 0;
+    unsigned int frames = 0;
+    struct timespec end;
+    struct timespec now;
+
     memset(&config, 0, sizeof(config));
     config.channels = channels;
     config.rate = rate;
@@ -140,131 +213,46 @@ unsigned int capture_sample(unsigned int card, unsigned int device,
     config.start_threshold = 0;
     config.stop_threshold = 0;
     config.silence_threshold = 0;
- 
+
     pcm = pcm_open(card, device, PCM_IN, &config);
     if (!pcm || !pcm_is_ready(pcm)) {
-        printf("Unable to open PCM device (%s)\n",
+        fprintf(stderr, "Unable to open PCM device (%s)\n",
                 pcm_get_error(pcm));
         return 0;
     }
- 
+
     size = pcm_frames_to_bytes(pcm, pcm_get_buffer_size(pcm));
     buffer = malloc(size);
     if (!buffer) {
-        printf("Unable to allocate %d bytes\n", size);
+        fprintf(stderr, "Unable to allocate %u bytes\n", size);
         free(buffer);
         pcm_close(pcm);
         return 0;
     }
- 
+
     printf("Capturing sample: %u ch, %u hz, %u bit\n", channels, rate,
            pcm_format_to_bits(format));
- 
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    end.tv_sec = now.tv_sec + cap_time;
+    end.tv_nsec = now.tv_nsec;
+
     while (capturing && !pcm_read(pcm, buffer, size)) {
-       
-    }
- 
-    free(buffer);
-    pcm_close(pcm);
-    return 0;
-}
- 
- 
- 
-int check_param(struct pcm_params *params, unsigned int param, unsigned int value,
-                 char *param_name, char *param_unit)
-{
-    unsigned int min;
-    unsigned int max;
-    int is_within_bounds = 1;
- 
-    min = pcm_params_get_min(params, param);
-    if (value < min) {
-        printf("%s is %u%s, device only supports >= %u%s\n", param_name, value,
-                param_unit, min, param_unit);
-        is_within_bounds = 0;
-    }
- 
-    max = pcm_params_get_max(params, param);
-    if (value > max) {
-        printf("%s is %u%s, device only supports <= %u%s\n", param_name, value,
-                param_unit, max, param_unit);
-        is_within_bounds = 0;
-    }
- 
-    return is_within_bounds;
-}
- 
-int sample_is_playable(unsigned int card, unsigned int device, unsigned int channels,
-                        unsigned int rate, unsigned int bits, unsigned int period_size,
-                        unsigned int period_count)
-{
-    struct pcm_params *params;
-    int can_play;
- 
-    params = pcm_params_get(card, device, PCM_OUT);
-    if (params == NULL) {
-        printf("Unable to open PCM device %u.\n", device);
-        return 0;
-    }
- 
-    can_play = check_param(params, PCM_PARAM_RATE, rate, "Sample rate", "Hz");
-    can_play &= check_param(params, PCM_PARAM_CHANNELS, channels, "Sample", " channels");
-    can_play &= check_param(params, PCM_PARAM_SAMPLE_BITS, bits, "Bitrate", " bits");
-    can_play &= check_param(params, PCM_PARAM_PERIOD_SIZE, period_size, "Period size", "Hz");
-    can_play &= check_param(params, PCM_PARAM_PERIODS, period_count, "Period count", "Hz");
- 
-    pcm_params_free(params);
- 
-    return can_play;
-}
- 
-void play_sample(unsigned int card, unsigned int device, unsigned int channels,
-                 unsigned int rate, unsigned int bits, unsigned int period_size,
-                 unsigned int period_count)
-{
-    struct pcm_config config;
-    struct pcm *pcm;
-    
-    memset(&config, 0, sizeof(config));
-    config.channels = channels;
-    config.rate = rate;
-    config.period_size = period_size;
-    config.period_count = period_count;
-    if (bits == 32)
-        config.format = PCM_FORMAT_S32_LE;
-    else if (bits == 16)
-        config.format = PCM_FORMAT_S16_LE;
-    else if (bits == 24)
-        config.format = PCM_FORMAT_S24_LE;
-    config.start_threshold = 0;
-    config.stop_threshold = 0;
-    config.silence_threshold = 0;
- 
- 
-    if (!sample_is_playable(card, device, channels, rate, bits, period_size, period_count)) {
-        return;
-    }
- 
-    pcm = pcm_open(card, device, PCM_OUT, &config);
-    if (!pcm || !pcm_is_ready(pcm)) {
-        printf("Unable to open PCM device %u (%s)\n",
-                device, pcm_get_error(pcm));
-        return;
-    }
- 
- 
-    printf("Playing sample: %u ch, %u hz, %u bit\n", channels, rate, bits);
- 
- 
-    do {
-        
-        if (pcm_write(pcm, buffer, size)) {
-            printf("Error playing sample\n");
+        if (fwrite(buffer, 1, size, file) != size) {
+            fprintf(stderr,"Error capturing sample\n");
             break;
         }
-        
-    } while (!closed);
- 
+        bytes_read += size;
+        if (cap_time) {
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            if (now.tv_sec > end.tv_sec ||
+                (now.tv_sec == end.tv_sec && now.tv_nsec >= end.tv_nsec))
+                break;
+        }
+    }
+
+    frames = pcm_bytes_to_frames(pcm, bytes_read);
+    free(buffer);
     pcm_close(pcm);
+    return frames;
 }
