@@ -905,6 +905,7 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
         goto fail;
 
     pcm->xruns = 0;
+    printf("internal pcm fd -> %d", pcm->fd);
     return pcm;
 
 fail:
