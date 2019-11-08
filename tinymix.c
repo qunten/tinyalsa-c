@@ -89,6 +89,7 @@ int main(int argc, char **argv)
         switch (c) {
         case 'D':
             card = atoi(optarg);
+            printf("arg d: %d", card);
             break;
         case 'h':
             usage();
