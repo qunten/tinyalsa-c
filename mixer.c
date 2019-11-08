@@ -49,7 +49,7 @@
 #define SNDRV_CTL_ELEM_ID_NAME_MAXLEN 44
 #endif
 
-#include <tinyalsa/asoundlib.h>
+#include "asoundlib.h"
 
 struct mixer_ctl {
     struct mixer *mixer;
