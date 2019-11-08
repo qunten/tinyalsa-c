@@ -32,7 +32,6 @@
 #include <stdint.h>
 #include <string.h>
 #include <signal.h>
-#include <endian.h>
 
 #define ID_RIFF 0x46464952
 #define ID_WAVE 0x45564157
@@ -63,7 +62,7 @@ static int close = 0;
 
 void play_sample(FILE *file, unsigned int card, unsigned int device, unsigned int channels,
                  unsigned int rate, unsigned int bits, unsigned int period_size,
-                 unsigned int period_count, uint32_t data_sz);
+                 unsigned int period_count);
 
 void stream_close(int sig)
 {
@@ -119,7 +118,6 @@ int main(int argc, char **argv)
         case ID_DATA:
             /* Stop looking for chunks */
             more_chunks = 0;
-            chunk_header.sz = le32toh(chunk_header.sz);
             break;
         default:
             /* Unknown chunk, skip bytes */
@@ -155,7 +153,7 @@ int main(int argc, char **argv)
     }
 
     play_sample(file, card, device, chunk_fmt.num_channels, chunk_fmt.sample_rate,
-                chunk_fmt.bits_per_sample, period_size, period_count, chunk_header.sz);
+                chunk_fmt.bits_per_sample, period_size, period_count);
 
     fclose(file);
 
@@ -202,8 +200,8 @@ int sample_is_playable(unsigned int card, unsigned int device, unsigned int chan
     can_play = check_param(params, PCM_PARAM_RATE, rate, "Sample rate", "Hz");
     can_play &= check_param(params, PCM_PARAM_CHANNELS, channels, "Sample", " channels");
     can_play &= check_param(params, PCM_PARAM_SAMPLE_BITS, bits, "Bitrate", " bits");
-    can_play &= check_param(params, PCM_PARAM_PERIOD_SIZE, period_size, "Period size", " frames");
-    can_play &= check_param(params, PCM_PARAM_PERIODS, period_count, "Period count", " periods");
+    can_play &= check_param(params, PCM_PARAM_PERIOD_SIZE, period_size, "Period size", "Hz");
+    can_play &= check_param(params, PCM_PARAM_PERIODS, period_count, "Period count", "Hz");
 
     pcm_params_free(params);
 
@@ -212,23 +210,20 @@ int sample_is_playable(unsigned int card, unsigned int device, unsigned int chan
 
 void play_sample(FILE *file, unsigned int card, unsigned int device, unsigned int channels,
                  unsigned int rate, unsigned int bits, unsigned int period_size,
-                 unsigned int period_count, uint32_t data_sz)
+                 unsigned int period_count)
 {
     struct pcm_config config;
     struct pcm *pcm;
     char *buffer;
-    unsigned int size, read_sz;
+    int size;
     int num_read;
 
-    memset(&config, 0, sizeof(config));
     config.channels = channels;
     config.rate = rate;
     config.period_size = period_size;
     config.period_count = period_count;
     if (bits == 32)
         config.format = PCM_FORMAT_S32_LE;
-    else if (bits == 24)
-        config.format = PCM_FORMAT_S24_3LE;
     else if (bits == 16)
         config.format = PCM_FORMAT_S16_LE;
     config.start_threshold = 0;
@@ -255,22 +250,20 @@ void play_sample(FILE *file, unsigned int card, unsigned int device, unsigned in
         return;
     }
 
-    printf("Playing sample: %u ch, %u hz, %u bit %u bytes\n", channels, rate, bits, data_sz);
+    printf("Playing sample: %u ch, %u hz, %u bit\n", channels, rate, bits);
 
     /* catch ctrl-c to shutdown cleanly */
     signal(SIGINT, stream_close);
 
     do {
-        read_sz = size < data_sz ? size : data_sz;
-        num_read = fread(buffer, 1, read_sz, file);
+        num_read = fread(buffer, 1, size, file);
         if (num_read > 0) {
             if (pcm_write(pcm, buffer, num_read)) {
                 fprintf(stderr, "Error playing sample\n");
                 break;
             }
-            data_sz -= num_read;
         }
-    } while (!close && num_read > 0 && data_sz > 0);
+    } while (!close && num_read > 0);
 
     free(buffer);
     pcm_close(pcm);

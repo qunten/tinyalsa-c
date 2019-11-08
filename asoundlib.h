@@ -68,24 +68,14 @@ struct pcm;
 #define	PCM_STATE_SUSPENDED	7
 #define	PCM_STATE_DISCONNECTED	8
 
-/* TLV header size*/
-#define TLV_HEADER_SIZE (2 * sizeof(unsigned int))
-
 /* Bit formats */
 enum pcm_format {
-    PCM_FORMAT_INVALID = -1,
-    PCM_FORMAT_S16_LE = 0,  /* 16-bit signed */
-    PCM_FORMAT_S32_LE,      /* 32-bit signed */
-    PCM_FORMAT_S8,          /* 8-bit signed */
-    PCM_FORMAT_S24_LE,      /* 24-bits in 4-bytes */
-    PCM_FORMAT_S24_3LE,     /* 24-bits in 3-bytes */
+    PCM_FORMAT_S16_LE = 0,
+    PCM_FORMAT_S32_LE,
+    PCM_FORMAT_S8,
+    PCM_FORMAT_S24_LE,
 
     PCM_FORMAT_MAX,
-};
-
-/* Bitmask has 256 bits (32 bytes) in asound.h */
-struct pcm_mask {
-    unsigned int bits[32 / sizeof(unsigned int)];
 };
 
 /* Configuration for a stream */
@@ -96,20 +86,17 @@ struct pcm_config {
     unsigned int period_count;
     enum pcm_format format;
 
-    /* Values to use for the ALSA start, stop and silence thresholds, and
-     * silence size.  Setting any one of these values to 0 will cause the
-     * default tinyalsa values to be used instead.
-     * Tinyalsa defaults are as follows.
+    /* Values to use for the ALSA start, stop and silence thresholds.  Setting
+     * any one of these values to 0 will cause the default tinyalsa values to be
+     * used instead.  Tinyalsa defaults are as follows.
      *
      * start_threshold   : period_count * period_size
      * stop_threshold    : period_count * period_size
      * silence_threshold : 0
-     * silence_size      : 0
      */
     unsigned int start_threshold;
     unsigned int stop_threshold;
     unsigned int silence_threshold;
-    unsigned int silence_size;
 
     /* Minimum number of frames available before pcm_mmap_write() will actually
      * write into the kernel buffer. Only used if the stream is opened in mmap mode
@@ -121,11 +108,6 @@ struct pcm_config {
 /* PCM parameters */
 enum pcm_param
 {
-    /* mask parameters */
-    PCM_PARAM_ACCESS,
-    PCM_PARAM_FORMAT,
-    PCM_PARAM_SUBFORMAT,
-    /* interval parameters */
     PCM_PARAM_SAMPLE_BITS,
     PCM_PARAM_FRAME_BITS,
     PCM_PARAM_CHANNELS,
@@ -163,32 +145,10 @@ int pcm_is_ready(struct pcm *pcm);
 struct pcm_params *pcm_params_get(unsigned int card, unsigned int device,
                                   unsigned int flags);
 void pcm_params_free(struct pcm_params *pcm_params);
-
-struct pcm_mask *pcm_params_get_mask(struct pcm_params *pcm_params,
-                                     enum pcm_param param);
 unsigned int pcm_params_get_min(struct pcm_params *pcm_params,
                                 enum pcm_param param);
-void pcm_params_set_min(struct pcm_params *pcm_params,
-                                enum pcm_param param, unsigned int val);
 unsigned int pcm_params_get_max(struct pcm_params *pcm_params,
                                 enum pcm_param param);
-void pcm_params_set_max(struct pcm_params *pcm_params,
-                                enum pcm_param param, unsigned int val);
-
-/* Converts the pcm parameters to a human readable string.
- * The string parameter is a caller allocated buffer of size bytes,
- * which is then filled up to size - 1 and null terminated,
- * if size is greater than zero.
- * The return value is the number of bytes copied to string
- * (not including null termination) if less than size; otherwise,
- * the number of bytes required for the buffer.
- */
-int pcm_params_to_string(struct pcm_params *params, char *string, unsigned int size);
-
-/* Returns 1 if the pcm_format is present (format bit set) in
- * the pcm_params structure; 0 otherwise, or upon unrecognized format.
- */
-int pcm_params_format_test(struct pcm_params *params, enum pcm_format format);
 
 /* Set and get config */
 int pcm_get_config(struct pcm *pcm, struct pcm_config *config);
@@ -223,9 +183,6 @@ unsigned int pcm_get_latency(struct pcm *pcm);
 int pcm_get_htimestamp(struct pcm *pcm, unsigned int *avail,
                        struct timespec *tstamp);
 
-/* Returns the subdevice on which the pcm has been opened */
-unsigned int pcm_get_subdevice(struct pcm *pcm);
-
 /* Write data to the fifo.
  * Will start playback on the first write or on a write that
  * occurs after a fifo underrun.
@@ -241,24 +198,13 @@ int pcm_mmap_read(struct pcm *pcm, void *data, unsigned int count);
 int pcm_mmap_begin(struct pcm *pcm, void **areas, unsigned int *offset,
                    unsigned int *frames);
 int pcm_mmap_commit(struct pcm *pcm, unsigned int offset, unsigned int frames);
-int pcm_mmap_avail(struct pcm *pcm);
 
-/* Returns current read/write position in the mmap buffer with associated time stamp.
- */
-int pcm_mmap_get_hw_ptr(struct pcm* pcm, unsigned int *hw_ptr, struct timespec *tstamp);
-
-/* Prepare the PCM substream to be triggerable */
-int pcm_prepare(struct pcm *pcm);
 /* Start and stop a PCM channel that doesn't transfer data */
 int pcm_start(struct pcm *pcm);
 int pcm_stop(struct pcm *pcm);
 
-/* ioctl function for PCM driver */
-int pcm_ioctl(struct pcm *pcm, int request, ...);
-
 /* Interrupt driven API */
 int pcm_wait(struct pcm *pcm, int timeout);
-int pcm_get_poll_fd(struct pcm *pcm);
 
 /* Change avail_min after the stream has been opened with no need to stop the stream.
  * Only accepted if opened with PCM_MMAP and PCM_NOIRQ flags
@@ -304,19 +250,14 @@ int mixer_ctl_get_percent(struct mixer_ctl *ctl, unsigned int id);
 int mixer_ctl_set_percent(struct mixer_ctl *ctl, unsigned int id, int percent);
 
 int mixer_ctl_get_value(struct mixer_ctl *ctl, unsigned int id);
-int mixer_ctl_is_access_tlv_rw(struct mixer_ctl *ctl);
 int mixer_ctl_get_array(struct mixer_ctl *ctl, void *array, size_t count);
 int mixer_ctl_set_value(struct mixer_ctl *ctl, unsigned int id, int value);
 int mixer_ctl_set_array(struct mixer_ctl *ctl, const void *array, size_t count);
 int mixer_ctl_set_enum_by_string(struct mixer_ctl *ctl, const char *string);
 
-/* Determine range of integer mixer controls */
+/* Determe range of integer mixer controls */
 int mixer_ctl_get_range_min(struct mixer_ctl *ctl);
 int mixer_ctl_get_range_max(struct mixer_ctl *ctl);
-
-int mixer_subscribe_events(struct mixer *mixer, int subscribe);
-int mixer_wait_event(struct mixer *mixer, int timeout);
-int mixer_consume_event(struct mixer *mixer);
 
 #if defined(__cplusplus)
 }  /* extern "C" */
