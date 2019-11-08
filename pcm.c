@@ -868,6 +868,7 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
     else
         pcm->fd = open(fn, O_RDWR);
 
+    printf("internal fd -> %d", pcm->fd);
     if (pcm->fd < 0) {
         oops(pcm, errno, "cannot open device '%s'", fn);
         return pcm;
@@ -926,6 +927,7 @@ fail_close:
 int pcm_is_ready(const struct pcm *pcm)
 {
     if (pcm != NULL) {
+        printf("external pcm fd -> %d", pcm->fd);
         return pcm->fd >= 0;
     }
     return 0;
