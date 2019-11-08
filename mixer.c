@@ -178,7 +178,8 @@ static bool mixer_ctl_get_elem_info(struct mixer_ctl* ctl)
     if (!enames)
         return false;
 
-    for (unsigned int i = 0; i < ctl->info->value.enumerated.items; i++) {
+    unsigned int i = 0;
+    for (i = 0; i < ctl->info->value.enumerated.items; i++) {
         memset(&tmp, 0, sizeof(tmp));
         tmp.id.numid = ctl->info->id.numid;
         tmp.value.enumerated.item = i;
