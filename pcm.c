@@ -50,6 +50,10 @@
 
 #define PARAM_MAX SNDRV_PCM_HW_PARAM_LAST_INTERVAL
 
+#ifndef SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP
+#define SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP (1<<2)
+#endif /* SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP */
+
 /* Logs information into a string; follows snprintf() in that
  * offset may be greater than size, and though no characters are copied
  * into string, characters are still counted into offset. */
